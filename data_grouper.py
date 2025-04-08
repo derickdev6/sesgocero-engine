@@ -24,14 +24,14 @@ class APIConfig:
     url: str
     key: str
     model: str = "deepseek-chat"
-    max_tokens: int = 8192
-    temperature: float = 0.3  # Lower temperature for more consistent grouping
-    top_p: float = 0.95
-    presence_penalty: float = 0.1
-    frequency_penalty: float = 0.1
-    connect_timeout: int = 10
-    read_timeout: int = 300
-    chunk_size: int = 8192
+    max_tokens = 8192  # Keep this value high if sending many articles
+    temperature = 0.3  # Low temperature for coherence and avoid arbitrary groupings
+    top_p = 0.9  # Slight sampling restriction for greater semantic precision
+    presence_penalty = 0.0  # Don't penalize repeating topics if they are related
+    frequency_penalty = 0.2  # Slight penalty to avoid unnecessary repetitions
+    connect_timeout = 10
+    read_timeout = 300
+    chunk_size = 8192
 
 
 class APIError(Exception):
@@ -112,6 +112,7 @@ def prepare_group_payload(
         }
         simplified_articles.append(simplified_article)
 
+    print_step(f"Requesting grouping for {len(simplified_articles)} articles")
     return {
         "model": config.model,
         "messages": [
@@ -129,15 +130,15 @@ def prepare_group_payload(
                 "content": f"""
                 Please analyze and group the following articles according to these instructions:
 
-                1. Group articles that communicate the same facts or events (based on titles and subtitles)
-                2. Create a descriptive cluster name that summarizes the main topic
+                1. Read all articles titles and subtitles, and group them based on the facts they communicate.
+                2. Create a descriptive cluster name that summarizes the main topic of the group in spanish.
                 3. Include all relevant articles in each group, even if from the same source
-                4. Place articles that don't belong to any group in the single_news list
+                4. Place ALL articles that DON'T belong to ANY group in the single_news list
                 5. Return the result in this exact JSON format:
                 {{
                     "clustered_news": [
                         {{
-                            "cluster_name": "Summary of the group's topic",
+                            "cluster_name": "Summary of the group's topic in spanish",
                             "articles": [
                                 {{
                                     "_id": "Article ID",
@@ -153,6 +154,8 @@ def prepare_group_payload(
                     ],
                     "single_news": [
                         {{
+                            "_id": "Article ID",
+                            "id": "Article ID",
                             "title": "Article title",
                             "subtitle": "Article subtitle",
                             "source": "Source name",
@@ -172,6 +175,7 @@ def prepare_group_payload(
         "top_p": config.top_p,
         "presence_penalty": config.presence_penalty,
         "frequency_penalty": config.frequency_penalty,
+        "stream": False,
         "response_format": {"type": "json_object"},
     }
 
@@ -192,19 +196,16 @@ def group_articles(
             json=payload,
             headers=headers,
             timeout=(config.connect_timeout, config.read_timeout),
-            stream=True,
+            stream=False,
         )
-        response.raise_for_status()
 
-        # Read the response content in chunks
-        content = []
-        for chunk in response.iter_content(chunk_size=config.chunk_size):
-            if chunk:
-                content.append(chunk.decode("utf-8"))
+        if response.status_code != 200:
+            print_step(f"API Error Response: {response.text}")
+            raise ResponseError(
+                f"API returned status code {response.status_code}: {response.text}"
+            )
 
-        # Join the chunks and parse the JSON
-        full_response = "".join(content)
-        response_data = json.loads(full_response)
+        response_data = response.json()
 
         # Extract the grouped articles from the first choice's message content
         if "choices" in response_data and len(response_data["choices"]) > 0:
@@ -261,16 +262,24 @@ def group_data(data: Union[str, List[Dict[str, Any]]]) -> str:
 
 if __name__ == "__main__":
     try:
-        from data_cleaner import clean_data
         from load_data import load_data
 
         # Load and clean the data first
+        print_step("Loading data...")
         raw_data = load_data()
-        cleaned_data = clean_data(raw_data)
+        raw_json = json.loads(raw_data)
+        print_step(f"Loaded {len(raw_json)} articles")
 
         # Group the cleaned data
-        grouped_data = group_data(cleaned_data)
-        print(grouped_data)
+        print_step("Grouping articles...")
+        grouped_data = group_data(raw_json)
+        grouped_json = json.loads(grouped_data)
+
+        # Save the grouped data to a file
+        print_step("Saving grouped data...")
+        with open("grouped_data.json", "w", encoding="utf-8") as f:
+            f.write(grouped_data)
+        print_step("Successfully saved grouped data")
 
     except Exception as e:
         print_step(f"Error: {str(e)}")
