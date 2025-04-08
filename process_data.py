@@ -7,19 +7,59 @@ import json
 import requests
 import time
 from datetime import datetime
-from typing import Union, Dict, Any
+from typing import Union, Dict, Any, Optional
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from requests.exceptions import ReadTimeout, ConnectTimeout, ConnectionError
+from dataclasses import dataclass
+from functools import lru_cache
 
 load_dotenv()
 
 
-def get_timestamp():
+@dataclass
+class APIConfig:
+    """Configuration for the DeepSeek API."""
+
+    url: str
+    key: str
+    model: str = "deepseek-chat"
+    max_tokens: int = 8192
+    temperature: float = 1.0
+    top_p: float = 0.95
+    presence_penalty: float = 0.1
+    frequency_penalty: float = 0.1
+    connect_timeout: int = 10
+    read_timeout: int = 300
+    chunk_size: int = 8192
+
+
+class APIError(Exception):
+    """Base exception for API-related errors."""
+
+    pass
+
+
+class ConfigurationError(APIError):
+    """Raised when there are configuration issues."""
+
+    pass
+
+
+class ResponseError(APIError):
+    """Raised when there are issues with the API response."""
+
+    pass
+
+
+@lru_cache(maxsize=1)
+def get_timestamp() -> str:
+    """Get current timestamp in a consistent format."""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def print_step(message: str, start_time: Union[float, None] = None):
+def print_step(message: str, start_time: Optional[float] = None) -> None:
+    """Print a step message with optional elapsed time."""
     timestamp = get_timestamp()
     if start_time:
         elapsed = time.time() - start_time
@@ -28,13 +68,14 @@ def print_step(message: str, start_time: Union[float, None] = None):
         print(f"[{timestamp}] {message}")
 
 
-def create_session_with_retries():
+def create_session_with_retries() -> requests.Session:
+    """Create a requests session with retry strategy."""
     session = requests.Session()
     retry_strategy = Retry(
-        total=5,  # increased number of retries
-        backoff_factor=2,  # increased wait time between retries
-        status_forcelist=[500, 502, 503, 504],  # HTTP status codes to retry on
-        allowed_methods=["POST"],  # only retry on POST requests
+        total=5,
+        backoff_factor=2,
+        status_forcelist=[500, 502, 503, 504],
+        allowed_methods=["POST"],
     )
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("http://", adapter)
@@ -42,34 +83,33 @@ def create_session_with_retries():
     return session
 
 
-def process_data(data: Union[str, Dict[str, Any]]) -> str:
-    start_time = time.time()
-    print_step("Starting data processing")
-
-    # DeepSeek API endpoint
+def get_api_config() -> APIConfig:
+    """Get API configuration from environment variables."""
     api_url = os.getenv("DEEPSEEK_API_URL")
     api_key = os.getenv("DEEPSEEK_API_KEY")
 
     if not all([api_url, api_key]):
-        raise ValueError("Missing required environment variables")
+        raise ConfigurationError("Missing required environment variables")
 
-    # Ensure api_url is a string
-    api_url = str(api_url)
+    return APIConfig(url=str(api_url), key=str(api_key))
 
-    # Convert string data to JSON if needed
+
+def prepare_payload(
+    data: Union[str, Dict[str, Any]], config: APIConfig
+) -> Dict[str, Any]:
+    """Prepare the API request payload."""
     if isinstance(data, str):
         try:
             data = json.loads(data)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON data: {str(e)}")
+            raise ResponseError(f"Invalid JSON data: {str(e)}")
 
-    # Prepare the request payload
-    payload = {
-        "model": "deepseek-chat",
+    return {
+        "model": config.model,
         "messages": [
             {
                 "role": "system",
-                "content": "You are a helpful assistant that processes and transforms data.",
+                "content": "You are a helpful assistant that processes and transforms data. You must always provide complete responses without truncation.",
             },
             {
                 "role": "user",
@@ -78,7 +118,8 @@ def process_data(data: Union[str, Dict[str, Any]]) -> str:
 
                 1. Clean all HTML tags from the content and any other fields
                 2. Group articles by similarity (articles talking about the same fact/event)
-                3. For each group:
+                3. Dont include groups with less than 3 articles.
+                4. For each group:
                    - Create a summary of the articles' titles
                    - Include the full articles in the group
                    - Calculate coverage percentage across 5 political stances:
@@ -95,7 +136,7 @@ def process_data(data: Union[str, Dict[str, Any]]) -> str:
                 [
                 {{
                     "Fact": "Summary of articles titles",
-                    "Articles": [article objects],
+                    "Articles": [article objects in json format (only first 100 characters of the content)],
                     "Coverage": [
                         {{"left": percentage}},
                         {{"center-left": percentage}},
@@ -113,46 +154,63 @@ def process_data(data: Union[str, Dict[str, Any]]) -> str:
                 }}
                 ]
 
+                IMPORTANT: 
+                - Ensure the response is complete and not truncated
+                - If the response is too long, prioritize the most important information
+                - Keep article content concise but maintain key information
+                - Focus on the most significant political stance differences
+                - Highlight only the most relevant omitted information
+
                 Data to process:
                 {json.dumps(data, ensure_ascii=False)}
                 """,
             },
         ],
-        "temperature": 0.5,
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+        "top_p": config.top_p,
+        "presence_penalty": config.presence_penalty,
+        "frequency_penalty": config.frequency_penalty,
+        "response_format": {"type": "json_object"},
     }
 
-    # Make the API request with retries
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    session = create_session_with_retries()
+
+def process_data(data: Union[str, Dict[str, Any]]) -> str:
+    """Process data using DeepSeek AI API."""
+    start_time = time.time()
+    print_step("Starting data processing")
 
     try:
-        print_step("Sending request to DeepSeek AI...")
+        config = get_api_config()
+        payload = prepare_payload(data, config)
+        headers = {
+            "Authorization": f"Bearer {config.key}",
+            "Content-Type": "application/json",
+        }
 
-        # First, send the request and get the response
-        response = session.post(
-            api_url,
-            json=payload,
-            headers=headers,
-            timeout=(
-                10,
-                300,
-            ),  # (connect timeout, read timeout) - increased significantly
-            stream=True,  # Enable streaming
-        )
-        response.raise_for_status()
+        with create_session_with_retries() as session:
+            print_step("Sending request to DeepSeek AI...")
+            response = session.post(
+                config.url,
+                json=payload,
+                headers=headers,
+                timeout=(config.connect_timeout, config.read_timeout),
+                stream=True,
+            )
+            response.raise_for_status()
 
-        # Read the response content in chunks
-        content = []
-        for chunk in response.iter_content(chunk_size=8192):
-            if chunk:
-                content.append(chunk.decode("utf-8"))
+            # Read the response content in chunks
+            content = []
+            for chunk in response.iter_content(chunk_size=config.chunk_size):
+                if chunk:
+                    content.append(chunk.decode("utf-8"))
 
-        # Join the chunks and parse the JSON
-        full_response = "".join(content)
-        result = json.loads(full_response)
+            # Join the chunks and parse the JSON
+            full_response = "".join(content)
+            result = json.loads(full_response)
 
-        print_step("Successfully received response from DeepSeek AI", start_time)
-        return json.dumps(result, ensure_ascii=False)
+            print_step("Successfully received response from DeepSeek AI", start_time)
+            return json.dumps(result, ensure_ascii=False)
 
     except ReadTimeout:
         raise TimeoutError(
@@ -165,11 +223,9 @@ def process_data(data: Union[str, Dict[str, Any]]) -> str:
     except ConnectionError as e:
         raise ConnectionError(f"Connection error occurred: {str(e)}")
     except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid response from DeepSeek AI: {str(e)}")
+        raise ResponseError(f"Invalid response from DeepSeek AI: {str(e)}")
     except Exception as e:
-        raise Exception(f"Unexpected error occurred: {str(e)}")
-    finally:
-        session.close()
+        raise APIError(f"Unexpected error occurred: {str(e)}")
 
 
 if __name__ == "__main__":

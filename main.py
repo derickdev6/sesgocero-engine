@@ -1,8 +1,9 @@
-# This script loads data from a MongoDB collection, processes it using DeepSeek AI,
-# and saves the processed data to a new JSON file.
+# This script loads data from MongoDB, cleans it, groups it by similarity,
+# and saves the processed data to output.json.
 
 from load_data import load_data
-from process_data import process_data
+from data_cleaner import clean_data
+from data_grouper import group_data
 import time
 from datetime import datetime
 import os
@@ -26,26 +27,43 @@ if __name__ == "__main__":
     start_time = time.time()
     print_step("Starting data processing pipeline")
 
-    # Load data
-    print_step("Loading data from MongoDB...")
-    data = load_data()
-    print_step(f"Loaded {len(json.loads(data))} articles")
+    try:
+        # Load data
+        print_step("Loading data from MongoDB...")
+        raw_data = load_data()
+        raw_articles = json.loads(raw_data)
+        print_step(f"Loaded {len(raw_articles)} articles")
 
-    # Process data
-    print_step("Processing data with DeepSeek AI...")
-    processed_data = process_data(data)
+        # Clean data
+        print_step("Cleaning articles...")
+        cleaned_data = clean_data(raw_data)
+        cleaned_articles = json.loads(cleaned_data)
+        print_step(f"Cleaned {len(cleaned_articles)} articles")
 
-    # processed_data must be only the model response, no other text
-    processed_data = json.loads(processed_data)
-    processed_data = processed_data["choices"][0]["message"]["content"]
-    processed_data = processed_data.replace("```json", "").replace("```", "")
+        # Group data
+        print_step("Grouping articles by similarity...")
+        grouped_data = group_data(cleaned_data)
+        grouped_articles = json.loads(grouped_data)
 
-    # Save processed data
-    output_file = "processed_data.json"
-    print_step(f"Saving processed data to {output_file}...")
+        # Count articles in clusters and single news
+        clustered_count = sum(
+            len(cluster["articles"]) for cluster in grouped_articles["clustered_news"]
+        )
+        single_count = len(grouped_articles["single_news"])
+        print_step(
+            f"Grouped {clustered_count} articles into {len(grouped_articles['clustered_news'])} clusters"
+        )
+        print_step(f"Found {single_count} ungrouped articles")
 
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(processed_data)
+        # Save processed data
+        output_file = "output.json"
+        print_step(f"Saving processed data to {output_file}...")
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write(grouped_data)
 
-    total_time = time.time() - start_time
-    print_step(f"Pipeline completed successfully! Total time: {total_time:.2f}s")
+        total_time = time.time() - start_time
+        print_step(f"Pipeline completed successfully! Total time: {total_time:.2f}s")
+
+    except Exception as e:
+        print_step(f"Error in pipeline: {str(e)}")
+        raise

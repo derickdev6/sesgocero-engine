@@ -1,56 +1,146 @@
-# Sesgocero Engine
+# SesgoCero Engine
 
-A Python-based data loading engine that interfaces with MongoDB to retrieve and process data.
+A Python-based engine for analyzing news articles to identify media bias and political stance through content analysis and grouping.
+
+## Overview
+
+SesgoCero Engine processes news articles from MongoDB, cleans their content, and groups them by similarity to identify patterns in media coverage. The engine uses DeepSeek AI to analyze and process the articles, focusing on identifying similar news events across different sources.
+
+## Features
+
+- **MongoDB Integration**: Fetches news articles from a MongoDB database
+- **Content Cleaning**: Removes HTML tags and formats content for analysis
+- **AI-Powered Analysis**: Uses DeepSeek AI for content processing and grouping
+- **Similarity Grouping**: Groups articles based on similar facts and events
+- **Error Handling**: Robust error handling and retry mechanisms
+- **Progress Tracking**: Detailed progress logging with timestamps
+
+## Project Structure
+
+```
+sesgocero-engine/
+├── load_data.py      # MongoDB data loading
+├── data_cleaner.py   # Article content cleaning
+├── data_grouper.py   # Article grouping by similarity
+├── main.py          # Main execution pipeline
+├── output.json      # Output file with grouped articles
+└── .env             # Environment variables
+```
 
 ## Prerequisites
 
-- Python 3.x
-- MongoDB instance
-- Required Python packages:
-  - pymongo
-  - python-dotenv
+- Python 3.8+
+- MongoDB database
+- DeepSeek AI API access
+- Required Python packages (see requirements.txt)
 
-## Setup
+## Installation
 
-1. Clone the repository
-2. Install the required packages:
-   ```bash
-   pip install pymongo python-dotenv
-   ```
-3. Create a `.env` file in the project root with the following variables:
-   ```
-   MONGODB_URI=your_mongodb_connection_string
-   MONGODB_DATABASE=your_database_name
-   MONGODB_COLLECTION=your_collection_name
-   ```
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/sesgocero-engine.git
+cd sesgocero-engine
+```
+
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. Create a `.env` file with the following variables:
+```
+MONGODB_URI=your_mongodb_connection_string
+DEEPSEEK_API_URL=your_deepseek_api_url
+DEEPSEEK_API_KEY=your_deepseek_api_key
+```
 
 ## Usage
 
-The main functionality is provided by the `load_data()` function in `load_data.py`. This function:
-- Connects to MongoDB using environment variables
-- Retrieves data from the specified collection
-- Returns the data as a list of dictionaries
-
-To run the script directly:
+Run the main script to process articles:
 ```bash
-python load_data.py
+python main.py
 ```
 
-To import and use in other Python files:
-```python
-from load_data import load_data
+The script will:
+1. Load articles from MongoDB
+2. Clean the article content
+3. Group articles by similarity
+4. Save results to `output.json`
 
-data = load_data()
+## Output Format
+
+The output is saved in `output.json` with the following structure:
+
+```json
+{
+    "clustered_news": [
+        {
+            "cluster_name": "Summary of the group's topic",
+            "articles": [
+                {
+                    "_id": "Article ID",
+                    "id": "Article ID",
+                    "title": "Article title",
+                    "subtitle": "Article subtitle",
+                    "source": "Source name",
+                    "date": "Publication date",
+                    "url": "Article URL"
+                }
+            ]
+        }
+    ],
+    "single_news": [
+        {
+            "_id": "Article ID",
+            "id": "Article ID",
+            "title": "Article title",
+            "subtitle": "Article subtitle",
+            "source": "Source name",
+            "date": "Publication date",
+            "url": "Article URL"
+        }
+    ]
+}
 ```
 
 ## Error Handling
 
-The script includes error handling for:
+The engine includes comprehensive error handling:
+- MongoDB connection errors
+- API request timeouts
+- JSON parsing errors
 - Missing environment variables
-- MongoDB connection issues
-- Data retrieval problems
+- Invalid data formats
 
-## Project Structure
+Each error is logged with timestamps and appropriate error messages.
 
-- `load_data.py`: Main script for loading data from MongoDB
-- `.env`: Configuration file for environment variables (not included in repository) 
+## Performance
+
+- Streaming response handling for large datasets
+- Chunked processing to manage memory usage
+- Retry mechanisms for API requests
+- Efficient article grouping based on titles and subtitles
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- DeepSeek AI for providing the API
+- MongoDB for data storage
+- Contributors and maintainers 

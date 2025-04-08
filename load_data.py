@@ -21,8 +21,8 @@ def load_data():
     db = client[str(mongo_db)]
     collection = db[str(mongo_collection)]
 
-    # Get latest 10 articles
-    result = collection.find().sort("date", -1).limit(10)
+    # Get all articles with date in descending order
+    result = collection.find().sort("date", -1)
 
     # Convert to list and handle ObjectId serialization
     result = list(result)

@@ -1,0 +1,41 @@
+{
+    "clustered_news": [],
+    "single_news": [
+        {
+            "_id": "67f48345e6e794f2fa381597",
+            "id": "ElEspectador_En vivo|“Le solicito a Ecopetrol importar gas”: Petro",
+            "title": "En vivo|“Le solicito a Ecopetrol importar gas”: Petro",
+            "subtitle": "El presidente Petro cuenta en vivo cómo buscará disminuir las tarifas de energía de la Región Caribe antes de terminar su mandato. Señala que no ha logrado su promesa debido a supuestos bloqueos contra su gobierno y les pide cuentas a sus ministros.",
+            "source": "El Espectador",
+            "date": "2025-04-08T00:00:00",
+            "url": "https://www.elespectador.com/politica/en-vivo-petro-en-consejo-de-ministros-anuncia-medidas-para-bajar-tarifas-de-energia/"
+        },
+        {
+            "_id": "67f3da6be6e794f2fa375354",
+            "id": "ElEspectador_Gobierno lanza plataforma para que ciudadanos aporten preguntas a la consulta popular",
+            "title": "Gobierno lanza plataforma para que ciudadanos aporten preguntas a la consulta popular",
+            "subtitle": "Será el ministro del Interior, Armando Benedetti, quien entregará los detalles del nuevo mecanismo con el cual busca fomentar la opinión y participación de los colombianos en la consulta que propuso el presidente Gustavo Petro por sus reformas sociales.",
+            "source": "El Espectador",
+            "date": "2025-04-07T00:00:00",
+            "url": "https://www.elespectador.com/politica/consulta-popular-de-petro-ministerio-del-interior-lanza-plataforma-para-que-ciudadanos-aporten-preguntas-noticias-hoy/"
+        },
+        {
+            "_id": "67f412aee6e794f2fa37d81f",
+            "id": "ElEspectador_Nubarrones en la economía venezolana por las sanciones petroleras de Donald Trump",
+            "title": "Nubarrones en la economía venezolana por las sanciones petroleras de Donald Trump",
+            "subtitle": "Algunos estiman que las restricciones puestas contra la petrolera estadounidense Chevron pueden alimentar la devaluación de la moneda nacional y presionar la inflación, empeorando el complejo panorama que vive el país desde hace años.",
+            "source": "El Espectador",
+            "date": "2025-04-07T00:00:00",
+            "url": "https://www.elespectador.com/mundo/venezuela/nubarrones-en-la-economia-venezolana-por-las-sanciones-petroleras-de-donald-trump-noticias-de-hoy/"
+        },
+        {
+            "_id": "67f3da6de6e794f2fa375356",
+            "id": "ElEspectador_Las claves de la entrega de armas de Comuneros del Sur, la primera en Gobierno Petro",
+            "title": "Las claves de la entrega de armas de Comuneros del Sur, la primera en Gobierno Petro",
+            "subtitle": "La estructura guerrillera, que se separó del ELN en mayo de 2024, depuso una tonelada de minas, morteros y granadas que fueron destruidas por el Ejército. Pese a los avances, hay dudas por el surgimiento de otro grupo armado en el territorio, las Autodefensas Unidas de Nariño.",
+            "source": "El Espectador",
+            "date": "2025-04-07T00:00:00",
+            "url": "https://www.elespectador.com/colombia-20/paz-y-memoria/petro-y-comuneros-del-sur-que-significa-primera-entrega-de-armas-de-paz-total-narino-eln/"
+        }
+    ]
+}
