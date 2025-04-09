@@ -1,5 +1,6 @@
 # This script takes JSON data from load_data.py and cleans it using DeepSeek AI.
 # It processes each article individually to manage token limits.
+# Cleaned articles are saved to the "clean_articles" collection in MongoDB.
 
 from dotenv import load_dotenv
 import os
@@ -13,6 +14,10 @@ from urllib3.util.retry import Retry
 from requests.exceptions import ReadTimeout, ConnectTimeout, ConnectionError
 from dataclasses import dataclass
 from functools import lru_cache
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure, OperationFailure
+from bson.objectid import ObjectId
+from bson.errors import InvalidId
 
 load_dotenv()
 
@@ -170,11 +175,12 @@ def clean_article(
         return article  # Return original article if cleaning fails
 
 
-def clean_data(data: Union[str, List[Dict[str, Any]]]) -> str:
-    """Clean all articles in the input data."""
+def clean_data(data: Union[str, List[Dict[str, Any]]]) -> None:
+    """Clean all articles in the input data, save them to MongoDB, and update original articles."""
     start_time = time.time()
-    print_step("Starting data cleaning process")
+    print_step("Starting data cleaning, saving, and updating process")
 
+    client = None
     try:
         # Convert string data to JSON if needed
         if isinstance(data, str):
@@ -187,29 +193,159 @@ def clean_data(data: Union[str, List[Dict[str, Any]]]) -> str:
             raise ResponseError("Input data must be a list of articles")
 
         config = get_api_config()
-        cleaned_articles = []
 
+        # --- MongoDB Connection ---
+        mongo_uri = os.getenv("MONGODB_URI")
+        mongo_db_name = os.getenv("MONGODB_DB")
+        mongo_original_col_name = os.getenv("MONGODB_COL")
+        mongo_clean_col_name = "clean_articles"
+
+        if not all([mongo_uri, mongo_db_name, mongo_original_col_name]):
+            raise ConfigurationError(
+                "Missing MongoDB URI, DB Name, or Original Collection Name in environment variables"
+            )
+
+        try:
+            client = MongoClient(mongo_uri)
+            db = client[str(mongo_db_name)]
+            original_collection = db[str(mongo_original_col_name)]
+            clean_collection = db[mongo_clean_col_name]
+            # Test connection
+            client.admin.command("ping")
+            print_step(f"Successfully connected to MongoDB database '{mongo_db_name}'.")
+            print_step(
+                f"Using original collection: '{mongo_original_col_name}' and clean collection: '{mongo_clean_col_name}'"
+            )
+        except ConnectionFailure as e:
+            raise ConfigurationError(f"Could not connect to MongoDB: {e}")
+        # --- End MongoDB Connection ---
+
+        articles_saved_count = 0
+        articles_updated_count = 0
+        articles_failed_count = 0
         with create_session_with_retries() as session:
             total_articles = len(data)
             for i, article in enumerate(data, 1):
-                print_step(f"Cleaning article {i}/{total_articles}")
+                print_step(
+                    f"💭Processing article {i}/{total_articles} (ID: {article.get('_id', 'N/A')})"
+                )
+
+                # --- Check if already cleaned --- # Added check
+                if article.get("cleaned") is True:
+                    print_step(
+                        f"  🏳️Skipping article {i} (ID: {article.get('_id', 'N/A')}) - Already marked as cleaned."
+                    )
+                    # Optionally increment a specific skip counter here if needed
+                    continue  # Skip to the next article
+                # --- End Check ---
+
+                original_article = article  # Keep reference to original article data
+                original_article_id_str = original_article.get(
+                    "_id"
+                )  # Get the string ID
+
+                if not original_article_id_str:
+                    print_step(f"  🏁Skipping article {i} due to missing '_id'.")
+                    articles_failed_count += 1
+                    continue
+
                 cleaned_article = clean_article(article, config, session)
-                cleaned_articles.append(cleaned_article)
 
-        print_step("Successfully cleaned all articles", start_time)
-        return json.dumps(cleaned_articles, ensure_ascii=False, indent=4)
+                # Check if cleaning was successful (returned dict is not the original one)
+                if cleaned_article is not original_article and isinstance(
+                    cleaned_article, dict
+                ):
+                    save_successful = False
+                    try:
+                        # 1. Insert the cleaned article into the target collection
+                        insert_result = clean_collection.insert_one(cleaned_article)
+                        print_step(
+                            f"  🟢Successfully saved cleaned article {i} to '{mongo_clean_col_name}' (New ID: {insert_result.inserted_id})"
+                        )
+                        articles_saved_count += 1
+                        save_successful = True
 
+                    except OperationFailure as e:
+                        print_step(
+                            f"  🔴Error saving cleaned article {i} to MongoDB: {e}"
+                        )
+                        articles_failed_count += 1
+                    except Exception as e:
+                        print_step(
+                            f"  🔴An unexpected error occurred while saving cleaned article {i}: {e}"
+                        )
+                        articles_failed_count += 1
+
+                    # 2. Update the original article ONLY if save was successful
+                    if save_successful:
+                        try:
+                            original_object_id = ObjectId(original_article_id_str)
+                            update_result = original_collection.update_one(
+                                {"_id": original_object_id}, {"$set": {"cleaned": True}}
+                            )
+                            if update_result.matched_count > 0:
+                                if update_result.modified_count > 0:
+                                    print_step(
+                                        f"  🟢Successfully marked original article {i} (ID: {original_article_id_str}) as cleaned in '{mongo_original_col_name}'."
+                                    )
+                                    articles_updated_count += 1
+                                else:
+                                    print_step(
+                                        f"  🏳️Original article {i} (ID: {original_article_id_str}) was already marked as cleaned."
+                                    )
+                            else:
+                                print_step(
+                                    f"  🚨Warning: Could not find original article {i} (ID: {original_article_id_str}) in '{mongo_original_col_name}' to mark as cleaned."
+                                )
+
+                        except InvalidId:
+                            print_step(
+                                f"  🔴Error: Invalid format for original article ID '{original_article_id_str}'. Cannot update status."
+                            )
+                        except OperationFailure as e:
+                            print_step(
+                                f"  🔴Error updating original article {i} in '{mongo_original_col_name}': {e}"
+                            )
+                        except Exception as e:
+                            print_step(
+                                f"  🔴An unexpected error occurred while updating original article {i}: {e}"
+                            )
+                else:
+                    # Cleaning failed or returned unexpected format, log it
+                    print_step(
+                        f"  🏁Skipping save and update for article {i} due to cleaning failure or invalid format."
+                    )
+                    articles_failed_count += 1
+
+        print_step(
+            f"Finished processing. ✅Saved: {articles_saved_count}, ✅Updated Original: {articles_updated_count}, ❌Failed/Skipped: {articles_failed_count}",
+            start_time,
+        )
+
+    except ConfigurationError as e:
+        raise e
     except Exception as e:
-        raise APIError(f"Error during data cleaning: {str(e)}")
+        raise APIError(f"Error during data cleaning/saving/updating process: {str(e)}")
+    finally:
+        # Ensure MongoDB client is closed if it was initialized
+        if client:
+            client.close()
+            print_step("MongoDB connection closed.")
 
 
 if __name__ == "__main__":
     try:
         from load_data import load_data
 
-        data = load_data()
-        cleaned_data = clean_data(data)
-        print(cleaned_data)
+        print_step("Loading data...")
+        data_json_string = load_data()
+        print_step("Data loaded.")
+
+        clean_data(data_json_string)
+
+        print_step(
+            "Data cleaning, saving, and updating process initiated successfully."
+        )
 
     except Exception as e:
-        print_step(f"Error: {str(e)}")
+        print_step(f"An error occurred in the main execution block: {str(e)}")

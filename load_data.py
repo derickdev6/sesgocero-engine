@@ -22,7 +22,8 @@ def load_data():
     collection = db[str(mongo_collection)]
 
     # Get all articles with date in descending order
-    result = collection.find().sort("date", -1).limit(250)
+    # cleaned field is false or not present
+    result = collection.find().sort("date", -1)
 
     # Convert to list and handle ObjectId serialization
     result = list(result)
