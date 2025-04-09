@@ -1,23 +1,21 @@
 # This script takes JSON data from load_data.py and cleans it using DeepSeek AI.
 # It processes each article individually to manage token limits.
 # Cleaned articles are saved to the "clean_articles" collection in MongoDB.
+# Original articles are updated with a 'cleaned' flag set to True.
 
 from dotenv import load_dotenv
 import os
 import json
-import requests
 import time
 from datetime import datetime
 from typing import Union, Dict, Any, List, Optional
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from requests.exceptions import ReadTimeout, ConnectTimeout, ConnectionError
 from dataclasses import dataclass
-from functools import lru_cache
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, OperationFailure
 from bson.objectid import ObjectId
 from bson.errors import InvalidId
+import asyncio
+import aiohttp
 
 load_dotenv()
 
@@ -57,7 +55,6 @@ class ResponseError(APIError):
     pass
 
 
-@lru_cache(maxsize=1)
 def get_timestamp() -> str:
     """Get current timestamp in a consistent format."""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -71,21 +68,6 @@ def print_step(message: str, start_time: Optional[float] = None) -> None:
         print(f"[{timestamp}] {message} (Elapsed: {elapsed:.2f}s)")
     else:
         print(f"[{timestamp}] {message}")
-
-
-def create_session_with_retries() -> requests.Session:
-    """Create a requests session with retry strategy."""
-    session = requests.Session()
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[500, 502, 503, 504],
-        allowed_methods=["POST"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
 
 
 def get_api_config() -> APIConfig:
@@ -133,49 +115,82 @@ def prepare_clean_payload(article: Dict[str, Any], config: APIConfig) -> Dict[st
     }
 
 
-def clean_article(
-    article: Dict[str, Any], config: APIConfig, session: requests.Session
+async def clean_article(
+    article: Dict[str, Any],
+    config: APIConfig,
+    session: aiohttp.ClientSession,
+    semaphore: asyncio.Semaphore,
+    article_index: int,
+    total_articles: int,
 ) -> Dict[str, Any]:
     """Clean a single article using DeepSeek AI."""
     try:
+        await semaphore.acquire()
+        print_step(
+            f"💭Processing article \t{article_index}/{total_articles}\t(ID: {article.get('_id', 'N/A')}"
+        )
+
         payload = prepare_clean_payload(article, config)
         headers = {
             "Authorization": f"Bearer {config.key}",
             "Content-Type": "application/json",
         }
 
-        response = session.post(
+        async with session.post(
             config.url,
             json=payload,
             headers=headers,
-            timeout=(config.connect_timeout, config.read_timeout),
-            stream=True,
+            timeout=aiohttp.ClientTimeout(total=config.read_timeout),
+        ) as response:
+            response.raise_for_status()
+            response_data = await response.json()
+
+            # Extract the cleaned article from the first choice's message content
+            if "choices" in response_data and len(response_data["choices"]) > 0:
+                cleaned_content = response_data["choices"][0]["message"]["content"]
+                print_step(
+                    f"🟢 Article {article_index}/{total_articles} cleaned successfully\tID: {article.get('_id', 'N/A')}"
+                )
+                return json.loads(cleaned_content)
+            else:
+                error_msg = f"API Response missing choices. Response: {json.dumps(response_data, indent=2)}"
+                print_step(f"🔴 Error in article {article_index}: {error_msg}")
+                raise ResponseError(error_msg)
+
+    except aiohttp.ClientError as e:
+        error_msg = f"Network error while cleaning article {article_index}: {str(e)}"
+        print_step(f"🔴 {error_msg}")
+        print_step(
+            f"🔴 Article content that caused the error: {json.dumps(article, indent=2)}"
         )
-        response.raise_for_status()
-
-        # Read the response content in chunks
-        content = []
-        for chunk in response.iter_content(chunk_size=config.chunk_size):
-            if chunk:
-                content.append(chunk.decode("utf-8"))
-
-        # Join the chunks and parse the JSON
-        full_response = "".join(content)
-        response_data = json.loads(full_response)
-
-        # Extract the cleaned article from the first choice's message content
-        if "choices" in response_data and len(response_data["choices"]) > 0:
-            cleaned_content = response_data["choices"][0]["message"]["content"]
-            return json.loads(cleaned_content)
-        else:
-            raise ResponseError("No choices found in API response")
-
+        return article
+    except json.JSONDecodeError as e:
+        error_msg = f"JSON parsing error in article {article_index}: {str(e)}"
+        print_step(f"🔴 {error_msg}")
+        print_step(
+            f"🔴 Article content that caused the error: {json.dumps(article, indent=2, ensure_ascii=False)}"
+        )
+        return article
+    except ResponseError as e:
+        error_msg = f"API response error in article {article_index}: {str(e)}"
+        print_step(f"🔴 {error_msg}")
+        print_step(
+            f"🔴 Article content that caused the error: {json.dumps(article, indent=2, ensure_ascii=False)}"
+        )
+        return article
     except Exception as e:
-        print_step(f"Error cleaning article: {str(e)}")
-        return article  # Return original article if cleaning fails
+        error_msg = f"Unexpected error cleaning article {article_index}: {str(e)}"
+        print_step(f"🔴 {error_msg}")
+        print_step(f"🔴 Error type: {type(e).__name__}")
+        print_step(
+            f"🔴 Article content that caused the error: {json.dumps(article, indent=2, ensure_ascii=False)}"
+        )
+        return article
+    finally:
+        semaphore.release()
 
 
-def clean_data(data: Union[str, List[Dict[str, Any]]]) -> None:
+async def clean_data(data: Union[str, List[Dict[str, Any]]]) -> None:
     """Clean all articles in the input data, save them to MongoDB, and update original articles."""
     start_time = time.time()
     print_step("Starting data cleaning, saving, and updating process")
@@ -223,19 +238,19 @@ def clean_data(data: Union[str, List[Dict[str, Any]]]) -> None:
         articles_saved_count = 0
         articles_updated_count = 0
         articles_failed_count = 0
-        with create_session_with_retries() as session:
-            total_articles = len(data)
-            for i, article in enumerate(data, 1):
-                print_step(
-                    f"💭Processing article {i}/{total_articles} (ID: {article.get('_id', 'N/A')})"
-                )
+        skipped_count = 0  # Counter for skipped articles
 
+        # Create a semaphore to limit concurrent requests
+        max_concurrent_tasks = 5
+        semaphore = asyncio.Semaphore(max_concurrent_tasks)
+
+        async with aiohttp.ClientSession() as session:  # Use aiohttp session
+            total_articles = len(data)
+            tasks = []  # List to hold tasks
+            for i, article in enumerate(data, 1):
                 # --- Check if already cleaned --- # Added check
                 if article.get("cleaned") is True:
-                    print_step(
-                        f"  🏳️Skipping article {i} (ID: {article.get('_id', 'N/A')}) - Already marked as cleaned."
-                    )
-                    # Optionally increment a specific skip counter here if needed
+                    skipped_count += 1
                     continue  # Skip to the next article
                 # --- End Check ---
 
@@ -249,72 +264,80 @@ def clean_data(data: Union[str, List[Dict[str, Any]]]) -> None:
                     articles_failed_count += 1
                     continue
 
-                cleaned_article = clean_article(article, config, session)
+                # Create a task for cleaning the article
+                task = asyncio.create_task(
+                    clean_article(
+                        article,
+                        config,
+                        session,
+                        semaphore,
+                        i,
+                        total_articles,
+                    )
+                )
+                tasks.append(
+                    (i, original_article, original_article_id_str, task)
+                )  # Store task and metadata
 
-                # Check if cleaning was successful (returned dict is not the original one)
-                if cleaned_article is not original_article and isinstance(
-                    cleaned_article, dict
-                ):
+            # Print total skipped articles after the loop
+            if skipped_count > 0:
+                print_step(
+                    f"🏳️Skipped {skipped_count} articles due to already being cleaned."
+                )
+
+            # Wait for all tasks to complete
+            for i, original_article, original_article_id_str, task in tasks:
+                try:
+                    cleaned_article = await task  # Await the task result
+
                     save_successful = False
                     try:
                         # 1. Insert the cleaned article into the target collection
                         insert_result = clean_collection.insert_one(cleaned_article)
-                        print_step(
-                            f"  🟢Successfully saved cleaned article {i} to '{mongo_clean_col_name}' (New ID: {insert_result.inserted_id})"
-                        )
                         articles_saved_count += 1
                         save_successful = True
-
-                    except OperationFailure as e:
                         print_step(
-                            f"  🔴Error saving cleaned article {i} to MongoDB: {e}"
+                            f"🟢 Article {i} saved to '{mongo_clean_col_name}' (ID: {insert_result.inserted_id})"
                         )
-                        articles_failed_count += 1
-                    except Exception as e:
-                        print_step(
-                            f"  🔴An unexpected error occurred while saving cleaned article {i}: {e}"
-                        )
-                        articles_failed_count += 1
 
-                    # 2. Update the original article ONLY if save was successful
-                    if save_successful:
+                        # 2. Update the original article ONLY if save was successful
                         try:
                             original_object_id = ObjectId(original_article_id_str)
                             update_result = original_collection.update_one(
-                                {"_id": original_object_id}, {"$set": {"cleaned": True}}
+                                {"_id": original_object_id},
+                                {"$set": {"cleaned": True}},
                             )
                             if update_result.matched_count > 0:
                                 if update_result.modified_count > 0:
                                     print_step(
-                                        f"  🟢Successfully marked original article {i} (ID: {original_article_id_str}) as cleaned in '{mongo_original_col_name}'."
+                                        f"🟢 Article {i} marked as cleaned in '{mongo_original_col_name}'"
                                     )
                                     articles_updated_count += 1
                                 else:
                                     print_step(
-                                        f"  🏳️Original article {i} (ID: {original_article_id_str}) was already marked as cleaned."
+                                        f"🏳️ Article {i} was already marked as cleaned"
                                     )
                             else:
                                 print_step(
-                                    f"  🚨Warning: Could not find original article {i} (ID: {original_article_id_str}) in '{mongo_original_col_name}' to mark as cleaned."
+                                    f"🚨 Article {i} not found in '{mongo_original_col_name}'"
                                 )
 
                         except InvalidId:
-                            print_step(
-                                f"  🔴Error: Invalid format for original article ID '{original_article_id_str}'. Cannot update status."
-                            )
+                            print_step(f"🔴 Invalid ID format for article {i}")
                         except OperationFailure as e:
-                            print_step(
-                                f"  🔴Error updating original article {i} in '{mongo_original_col_name}': {e}"
-                            )
+                            print_step(f"🔴 Error updating article {i}: {e}")
                         except Exception as e:
-                            print_step(
-                                f"  🔴An unexpected error occurred while updating original article {i}: {e}"
-                            )
-                else:
-                    # Cleaning failed or returned unexpected format, log it
-                    print_step(
-                        f"  🏁Skipping save and update for article {i} due to cleaning failure or invalid format."
-                    )
+                            print_step(f"🔴 Unexpected error updating article {i}: {e}")
+
+                    except OperationFailure as e:
+                        print_step(f"🔴 Error saving article {i}: {e}")
+                        articles_failed_count += 1
+                    except Exception as e:
+                        print_step(f"🔴 Unexpected error saving article {i}: {e}")
+                        articles_failed_count += 1
+
+                except Exception as e:
+                    print_step(f"🔴 Error processing article {i}: {e}")
                     articles_failed_count += 1
 
         print_step(
@@ -341,7 +364,7 @@ if __name__ == "__main__":
         data_json_string = load_data()
         print_step("Data loaded.")
 
-        clean_data(data_json_string)
+        asyncio.run(clean_data(data_json_string))
 
         print_step(
             "Data cleaning, saving, and updating process initiated successfully."
