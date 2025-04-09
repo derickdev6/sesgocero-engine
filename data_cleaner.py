@@ -127,7 +127,7 @@ async def clean_article(
     try:
         await semaphore.acquire()
         print_step(
-            f"💭Processing article \t{article_index}/{total_articles}\t(ID: {article.get('_id', 'N/A')}"
+            f"💭 {article_index}/{total_articles}\tID: {article.get('_id', 'N/A')}"
         )
 
         payload = prepare_clean_payload(article, config)
@@ -149,7 +149,7 @@ async def clean_article(
             if "choices" in response_data and len(response_data["choices"]) > 0:
                 cleaned_content = response_data["choices"][0]["message"]["content"]
                 print_step(
-                    f"🟢 Article {article_index}/{total_articles} cleaned successfully\tID: {article.get('_id', 'N/A')}"
+                    f"🧹 {article_index}/{total_articles}\tID: {article.get('_id', 'N/A')}"
                 )
                 return json.loads(cleaned_content)
             else:
@@ -297,7 +297,7 @@ async def clean_data(data: Union[str, List[Dict[str, Any]]]) -> None:
                         articles_saved_count += 1
                         save_successful = True
                         print_step(
-                            f"🟢 Article {i} saved to '{mongo_clean_col_name}' (ID: {insert_result.inserted_id})"
+                            f"💾 {i}/{total_articles}\tID: {insert_result.inserted_id}"
                         )
 
                         # 2. Update the original article ONLY if save was successful
@@ -310,12 +310,12 @@ async def clean_data(data: Union[str, List[Dict[str, Any]]]) -> None:
                             if update_result.matched_count > 0:
                                 if update_result.modified_count > 0:
                                     print_step(
-                                        f"🟢 Article {i} marked as cleaned in '{mongo_original_col_name}'"
+                                        f"🟢 {i}/{total_articles}\tID: {original_object_id}"
                                     )
                                     articles_updated_count += 1
                                 else:
                                     print_step(
-                                        f"🏳️ Article {i} was already marked as cleaned"
+                                        f"🏳️ {i}/{total_articles}\tID: {original_object_id}"
                                     )
                             else:
                                 print_step(
