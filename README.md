@@ -6,9 +6,13 @@ A Python-based engine for analyzing news articles to identify media bias and pol
 
 SesgoCero Engine processes news articles from MongoDB, cleans their content, and groups them by similarity to identify patterns in media coverage. The engine uses DeepSeek AI to analyze and process the articles, focusing on identifying similar news events across different sources.
 
-1. **load_data.py**: Loads article data from various sources into MongoDB
-2. **data_cleaner.py**: Cleans articles using DeepSeek AI and saves them to a separate collection
-3. **cluster_articles.py**: Clusters cleaned articles based on content similarity using DeepSeek AI
+The engine consists of the following main components:
+
+1. **main.py**: Orchestrates the entire data processing pipeline, running all steps in sequence
+2. **load_data.py**: Loads article data from various sources into MongoDB
+3. **data_cleaner.py**: Cleans articles using DeepSeek AI and saves them to a separate collection
+4. **cluster_articles.py**: Clusters cleaned articles based on content similarity using DeepSeek AI
+5. **fix_clusters.py**: Updates cluster metadata with coverage statistics and article counts
 
 ## Requirements
 
@@ -46,21 +50,39 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Loading Data
+### Running the Complete Pipeline
+
+To run the entire data processing pipeline:
+
+```bash
+python main.py
+```
+
+This will execute all steps in sequence:
+1. Load data from sources
+2. Clean the loaded articles
+3. Cluster the cleaned articles
+4. Fix cluster metadata
+
+### Individual Scripts
+
+You can also run each script individually:
+
+#### Loading Data
 
 To load article data into MongoDB:
 
-```
+```bash
 python load_data.py
 ```
 
 This will load articles from the configured sources into the specified MongoDB collection.
 
-### Cleaning Articles
+#### Cleaning Articles
 
 To clean articles using DeepSeek AI:
 
-```
+```bash
 python data_cleaner.py
 ```
 
@@ -70,11 +92,11 @@ This script:
 - Saves cleaned articles to the `clean_articles` collection
 - Updates the original articles with a `cleaned` flag
 
-### Clustering Articles
+#### Clustering Articles
 
 To cluster cleaned articles:
 
-```
+```bash
 python cluster_articles.py
 ```
 
@@ -84,6 +106,21 @@ This script:
 - Uses DeepSeek AI to determine which cluster each article belongs to
 - Creates new clusters or adds articles to existing clusters
 - Updates articles with their cluster IDs
+
+#### Fixing Cluster Metadata
+
+To update cluster metadata with coverage statistics:
+
+```bash
+python fix_clusters.py
+```
+
+This script:
+- Updates article counts for all clusters
+- Initializes coverage statistics for clusters
+- Calculates political stance coverage for each cluster
+- Skips clusters that don't need updates
+- Provides detailed progress and summary information
 
 ## MongoDB Collections
 
