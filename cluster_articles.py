@@ -153,7 +153,7 @@ def determine_cluster(
         if "choices" in response_data and len(response_data["choices"]) > 0:
             cluster_name = response_data["choices"][0]["message"]["content"].strip()
             print_step(
-                f"🪣 {article_index}/{total_articles}\tID: {article.get('_id', 'N/A')}\tCluster: {cluster_name}"
+                f"🪣  {article_index}/{total_articles}\tID: {article.get('_id', 'N/A')}\tCluster: {cluster_name}"
             )
             return cluster_name
         else:
@@ -254,9 +254,6 @@ def cluster_articles() -> None:
         for i, article in enumerate(articles, 1):
             # Skip articles that are already in a cluster
             if article.get("cluster_id"):
-                print_step(
-                    f"⏩ {i}/{total_articles}\tID: {article.get('_id', 'N/A')}\tAlready in cluster"
-                )
                 articles_processed += 1
                 articles_skipped += 1
                 continue
