@@ -1,4 +1,4 @@
-# This script loads articles from the clean_articles collection and assigns them to clusters
+# This script loads articles from the articles collection and assigns them to clusters
 # using DeepSeek AI. It either adds articles to existing clusters or creates new ones.
 
 from dotenv import load_dotenv
@@ -25,7 +25,7 @@ class APIConfig:
     key: str
     model: str = "deepseek-chat"
     max_tokens: int = 8192
-    temperature: float = 0.3  # Low temperature for more deterministic responses
+    temperature: float = 0.1  # Low temperature for more deterministic responses
     top_p: float = 0.9
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.2
@@ -82,6 +82,16 @@ def prepare_cluster_payload(
     article: Dict[str, Any], cluster_names: List[str], config: APIConfig
 ) -> Dict[str, Any]:
     """Prepare the API request payload for determining article cluster."""
+    # Create a copy of the article with ObjectId converted to string
+    article_copy = article.copy()
+    if "_id" in article_copy and isinstance(article_copy["_id"], ObjectId):
+        article_copy["_id"] = str(article_copy["_id"])
+
+    # Convert any other ObjectId that might be in the article
+    for key, value in article_copy.items():
+        if isinstance(value, ObjectId):
+            article_copy[key] = str(value)
+
     return {
         "model": config.model,
         "messages": [
@@ -100,7 +110,7 @@ def prepare_cluster_payload(
                 Please analyze this article and determine which cluster it belongs to:
 
                 Article:
-                {json.dumps(article, ensure_ascii=False)}
+                {json.dumps(article_copy, ensure_ascii=False)}
 
                 Existing clusters:
                 {json.dumps(cluster_names, ensure_ascii=False)}
@@ -193,7 +203,7 @@ def determine_cluster(
 
 
 def cluster_articles() -> None:
-    """Load articles from clean_articles collection and assign them to clusters."""
+    """Load articles from articles collection and assign them to clusters."""
     start_time = time.time()
     print_step("Starting article clustering process")
 
@@ -204,7 +214,7 @@ def cluster_articles() -> None:
         # --- MongoDB Connection ---
         mongo_uri = os.getenv("MONGODB_URI")
         mongo_db_name = os.getenv("MONGODB_DB")
-        mongo_clean_col_name = "clean_articles"
+        mongo_clean_col_name = "articles"
         mongo_clusters_col_name = "clusters"
 
         if not all([mongo_uri, mongo_db_name]):
@@ -227,11 +237,11 @@ def cluster_articles() -> None:
             raise ConfigurationError(f"Could not connect to MongoDB: {e}")
         # --- End MongoDB Connection ---
 
-        # 1. Load all articles from the clean_articles collection
-        print_step("Loading articles from clean_articles collection...")
+        # 1. Load all articles from the articles collection
+        print_step("Loading articles from articles collection...")
         articles = list(clean_collection.find())
         total_articles = len(articles)
-        print_step(f"Loaded {total_articles} articles from clean_articles collection")
+        print_step(f"Loaded {total_articles} articles from articles collection")
 
         # 2. Load all cluster names from the clusters collection
         print_step("Loading cluster names from clusters collection...")
@@ -279,7 +289,21 @@ def cluster_articles() -> None:
                 try:
                     # Add article to the cluster's articles list
                     update_result = clusters_collection.update_one(
-                        {"_id": cluster["_id"]}, {"$push": {"articles": article["_id"]}}
+                        {"_id": cluster["_id"]},
+                        {
+                            "$push": {
+                                "articles.list": {
+                                    "url": article["url"],
+                                    "political_stance": (
+                                        article["political_stance"]
+                                        if "political_stance" in article
+                                        else "unknown"
+                                    ),
+                                }
+                            },
+                            "$inc": {"articles.count": 1},
+                            "$set": {"updated_at": datetime.now()},
+                        },
                     )
 
                     # Update the article with the cluster_id
@@ -290,7 +314,7 @@ def cluster_articles() -> None:
 
                     if update_result.modified_count > 0:
                         print_step(
-                            f"🟢 {i}/{total_articles}\tID: {article.get('_id', 'N/A')}\tAdded to existing cluster: {cluster_name}"
+                            f"🟢 {i}/{total_articles}\tID: {article.get('_id', 'N/A')}\t➕Added to existing cluster: {cluster_name}"
                         )
                         articles_added_to_existing += 1
                     else:
@@ -307,7 +331,19 @@ def cluster_articles() -> None:
                     # Create a new cluster document
                     new_cluster = {
                         "name": cluster_name,
-                        "articles": [article["_id"]],
+                        "articles": {
+                            "count": 1,
+                            "list": [
+                                {
+                                    "url": article["url"],
+                                    "political_stance": (
+                                        article["political_stance"]
+                                        if "political_stance" in article
+                                        else "unknown"
+                                    ),
+                                }
+                            ],
+                        },
                         "created_at": datetime.now(),
                         "updated_at": datetime.now(),
                     }
@@ -325,7 +361,7 @@ def cluster_articles() -> None:
                     cluster_names.append(cluster_name)
 
                     print_step(
-                        f"🟢 {i}/{total_articles}\tID: {article.get('_id', 'N/A')}\t➕Created new cluster: {cluster_name}"
+                        f"🟢 {i}/{total_articles}\tID: {article.get('_id', 'N/A')}\t🆕Created new cluster: {cluster_name}"
                     )
                     new_clusters_created += 1
                 except Exception as e:
@@ -337,7 +373,7 @@ def cluster_articles() -> None:
             articles_processed += 1
 
         print_step(
-            f"Finished clustering. ✅Processed: {articles_processed}, ✅Added to existing: {articles_added_to_existing}, ✅New clusters: {new_clusters_created}, ❌Failed: {articles_failed}, ⏩Skipped: {articles_skipped}",
+            f"Finished clustering. ✅Processed: {articles_processed - articles_skipped}, ✅Added to existing: {articles_added_to_existing}, ✅New clusters: {new_clusters_created}, ❌Failed: {articles_failed}, ⏩Skipped: {articles_skipped}",
             start_time,
         )
 

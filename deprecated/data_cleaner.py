@@ -130,6 +130,9 @@ async def clean_article(
             f"💭 {article_index}/{total_articles}\tID: {article.get('_id', 'N/A')}"
         )
 
+        # Store the original ID before cleaning
+        original_id = article.get("_id")
+
         payload = prepare_clean_payload(article, config)
         headers = {
             "Authorization": f"Bearer {config.key}",
@@ -148,10 +151,17 @@ async def clean_article(
             # Extract the cleaned article from the first choice's message content
             if "choices" in response_data and len(response_data["choices"]) > 0:
                 cleaned_content = response_data["choices"][0]["message"]["content"]
+                cleaned_article = json.loads(cleaned_content)
+
+                # Add original_article_id field instead of overwriting _id
+                cleaned_article["original_article_id"] = original_id
+                # Remove _id if it exists in the cleaned content to let MongoDB generate a new one
+                cleaned_article.pop("_id", None)
+
                 print_step(
                     f"🧹 {article_index}/{total_articles}\tID: {article.get('_id', 'N/A')}"
                 )
-                return json.loads(cleaned_content)
+                return cleaned_article
             else:
                 error_msg = f"API Response missing choices. Response: {json.dumps(response_data, indent=2)}"
                 print_step(f"🔴 Error in article {article_index}: {error_msg}")
@@ -358,7 +368,7 @@ async def clean_data(data: Union[str, List[Dict[str, Any]]]) -> None:
 
 if __name__ == "__main__":
     try:
-        from load_data import load_data
+        from deprecated.load_data import load_data
 
         print_step("Loading data...")
         data_json_string = load_data()
